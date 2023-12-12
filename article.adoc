@@ -19,13 +19,13 @@ v1.0, 2023-12-11: Rohentwurf
 Machmal muss man ungewöhnliche Wege gehen, um seine Anwendung zu beschleunigen. In meinem Fall war es der Umbau des I/O-Subsystems in OpenJDK.
 
 
-== Wie alles begann
+== Es war einmal ein lahmer Build…
 
-Vor einigen Jahren bemerkte ich, dass mein Maven-Build sehr langsam war, und das störte mein Team sehr. Schnell war als Ursache die Menge und Größe der von uns verwendeten Dateien ausgemacht, denn unser Projekt beinhaltete sehr viele und vor allem sehr große Dateien. Seltsamerweise schien Maven sie in den Hauptspeicher zu laden, obwohl sie keines Processings bedürfen (beispielsweise beim "Download" aus dem lokalen Repository). Eine Prüfung des Quellcodes von Maven (genau genommen von dessen I/O-Bibliothek aus dem Plexus-Projekt) zeigte, dass Maven zum Kopieren eine Schleife über ein Paar an InputStream und OutputStream benutzte. Eine Schleife, wie wir sie alle schon zigfach geschrieben hatten in den letzten Dekaden.
+Vor einigen Jahren bemerkte ich, dass mein Maven-Build sehr langsam war, und das störte mein Team sehr. Schnell war als Ursache die Menge und Größe der von uns verwendeten Dateien ausgemacht, denn unser Projekt beinhaltete sehr viele und vor allem sehr große Dateien. Seltsamerweise schien Maven sie in den Hauptspeicher zu laden, obwohl sie keines Processings bedurften (beispielsweise beim "Download" aus dem lokalen Repository). Eine Prüfung des Quellcodes von Maven (genau genommen von dessen I/O-Bibliothek aus dem Plexus-Projekt) zeigte, dass Maven zum Kopieren eine Schleife über ein Paar an InputStream und OutputStream benutzte. Eine Schleife, wie wir sie alle schon zigfach geschrieben hatten in den zurückliegenden Dekaden.
 
-Als versierter Open-Source-Contributor sandte ich einen Pull Request ein, der die Schleife durch den seit Java 9 existierenden Befehl InputStream.transferTo(OutputStream) ersetzte. Meine Hoffnung war, dass OpenJDK die Methode nicht nur als "Syntactic Sugar" anbot, sondern sie in irgend einer Art und Weise performancetechnisch optimiert.
+Als versierter Open-Source-Contributor sandte ich einen Pull Request ein, der die Schleife durch den seit Java 9 existierenden Befehl `InputStream.transferTo(OutputStream)` ersetzte. Meine Hoffnung war, dass OpenJDK die Methode nicht nur als "Syntactic Sugar" anbot, sondern sie in irgend einer Art und Weise performancetechnisch optimierte.
 
-Wie ein auf Wunsch des Maven-Teams durchgeführter JMH-Benchmark<<JMH>> zeige, war dem leider nicht so. Maven war somit genauso langsam wie vorher! Also grub ich noch ein paar Schichten tiefer und fand zu meinem Erschrecken im Quellcode von OpenJDK die gleiche, simple Schleife, die ich kurz vorher aus Maven ausgebaut hatte (siehe Listing 1).
+Wie ein auf Wunsch des Maven-Teams durchgeführter JMH-Benchmark<<JMH>> aber zeige, war dem leider nicht so. Maven war somit genauso langsam wie vorher! Also grub ich noch ein paar Schichten tiefer und fand zu meinem Erschrecken im Quellcode von OpenJDK die gleiche, simple Schleife, die ich kurz vorher aus Maven ausgebaut hatte (siehe Listing 1).
 
 .Nicht zur Nachahmung empfohlen: Sehr langsamer Original-Code aus JDK 9
 ----
@@ -45,32 +45,68 @@ public long transferTo(OutputStream out) throws IOException {
 
 == Das schnellste Java ist: gar kein Java
 
-Um die Performance zu steigern musste ich also wohl oder übel einen Pull Request an OpenJDK senden, welcher der Java-Laufzeitbibliothek abgewöhnt, die Datei *grundlos* in kleinen Häppchen der Größe `DEFAULT_BUFFER_SIZE` (damals gerade mal 8K) durch den Java-Heap zu pumpen. Was mir vorschwebte war eher, die JVM gar nicht erst mit der Aufgabe zu belasten, denn ein Betriebssystem ist für Aufgaben der Art "Daten von hier nach da schieben" bestens gerüstet. Es gab keinerlei Grund, diese Aufgabe überhaupt in Java lösen zu wollen.
+Um die Performance zu steigern musste ich also wohl oder übel einen Pull Request an OpenJDK senden, welcher der Java-Laufzeitbibliothek abgewöhnt, die Datei _grundlos_ in kleinen Häppchen der Größe `DEFAULT_BUFFER_SIZE` (damals gerade mal 8K) durch den Java-Heap zu pumpen. Die Vergrößerung des `DEFAULT_BUFFER_SIZE` bringt zwar auch schon was (und wurde von mir tatsächlich in OpenJDK vorgenommen) - aber das wäre ja keinen Artikel in der Java aktuell wert. Was mir vorschwebte war eher, die JVM gar nicht erst mit der Aufgabe zu belasten, denn ein Betriebssystem ist für Aufgaben der Art "Daten von hier nach da schieben" bestens gerüstet. Es gab keinerlei Grund, diese Aufgabe überhaupt in Java lösen zu wollen.
 
-Hierzu muss man wissen, dass der Kern des Betriebssystem (egal ob Linux oder Windows) diese Aufgabe *super schnell* erledigen kann, je nach OS und Hardware diese Aufgabe sogar direkt an die Hardware (z. B. ein SAN-Device) delegieren kann, der Transfer durch die JVM jedoch um Größenordnungen langsamer abläuft, da jedes Byte den ganzen Weg in das Java-Heap und vor dort wieder zurück laufen muss (vereinfacht gesagt: je länger der Weg, desto langsamer der Transfer; im schlimmsten Fall liegen die Dateien in einem SAN oder gar Cloud-Laufwerk und müssten zweimal LAN oder WAN passieren). Selbst im besten Fall (Transfers zwischen lokalen Dateien) wäre der Umweg über die JVM und deren Heap, wie wenn man zum Briefkasten um die Ecke erst einmal über die Autobahn fahren müsste!
+Hierzu muss man wissen, dass der Kern des Betriebssystem (egal ob Linux oder Windows) diese Aufgabe _super schnell_ erledigen kann, je nach OS und Hardware diese Aufgabe sogar direkt an die Hardware (z. B. ein SAN-Device) delegieren kann, der Transfer durch die JVM jedoch um Größenordnungen langsamer abläuft, da jedes Byte den ganzen Weg in das Java-Heap und vor dort wieder zurück zur Hardware laufen muss (vereinfacht gesagt: je länger der Weg, desto langsamer der Transfer; im schlimmsten Fall liegen die Dateien in einem SAN oder gar Cloud-Laufwerk und müssten zweimal LAN oder WAN passieren). Aber selbst im besten Fall (Transfers zwischen lokalen Dateien) wäre der Umweg über die JVM und deren Heap, wie wenn man zum Briefkasten um die Ecke erst einmal über die Autobahn fahren müsste!
 
-Was nun aber so einfach klingt, war in OpenJDK gar nicht so einfach umzusetzen. In letzter Konsequenz waren mehrere, aufeinander aufbauende Pull Request nötig, um in jedem Fall die optimale Performance zu erzielen. Dies begründet sich unter anderem darin, dass `transferTo()` nicht auf Dateien beschränkt ist (dann wäre die Lösung trivial gewesen), und dass die diversen Betriebssysteme unterschiedliche APIs für unterschiedliche Arten von Datenquellen und -Senken besitzen. So gibt es beispielsweise Befehle, die einen direkten Datei-zu-Datei-Transfer beschleunigen, aber andere, die das gleiche mit Netzwerksockets können. Was aber, wenn von einem Socket empfangen und an eine Datei gesendet werden soll? Meine Optimierung von `transferTo()` sollte ja *alle* Nutzungsarten beschleunigen.
+Was nun aber so einfach klingt, war in OpenJDK gar nicht so einfach umzusetzen. In letzter Konsequenz waren mehrere, aufeinander aufbauende Pull Request nötig, um in jedem Fall die optimale Performance zu erzielen. Dies begründet sich unter anderem darin, dass `transferTo()` nicht auf Dateien beschränkt ist (dann wäre die Lösung trivial gewesen), und dass die diversen Betriebssysteme unterschiedliche APIs für unterschiedliche Arten von Datenquellen und -Senken besitzen. So gibt es beispielsweise Befehle, die einen direkten Datei-zu-Datei-Transfer beschleunigen, aber andere, die das gleiche mit anderen Ressourcen können. Was aber, wenn von einem Socket empfangen und an eine Datei gesendet werden soll? Meine Optimierung von `transferTo()` sollte ja _alle_ Nutzungsarten beschleunigen. Zum anderen ist OpenJDK intern sehr komplex und gerade der NIO-Code hat einige Tücken, die einem in letzter Konsequenz erst klar werden, wenn man sich _intensiv_ mit dem internen Aufbau der einzelnen Klassen beschäftigt (Frage: Wer wusste, dass es ein explizit zu setzendes Lock gibt, das verhindert, dass man den Betriebsmodus eines Channels ändert? Ich will Hände oben sehen!).
 
-Die von mir entwickelte und über Monate hinweg gemeinsam mit dem Java-I/O-Kernteam um Alan Bateman, Brian Burkhalter und Lance Andersen immer weiter verbesserte Lösung gestaltete sich entsprechend aufwändig, da weder OpenJDK noch zwingend *jedes* Betriebssystem einen einheitlichen Zugriffsweg für unterschiedliche Hardware kennt. Entsprechend muss der Code sehr viele Unterscheidungen treffen. Aus Gründen der Lesbarkeit wird nur der Pseudocode abgedruckt; der vollständige Quellcode ist im Github-Repository<<TransferTo>> von OpenJDK zu finden.
+Die von mir entwickelte und über Monate hinweg gemeinsam mit dem Java-I/O-Kernteam um Alan Bateman, Brian Burkhalter und Lance Andersen immer weiter verbesserte Lösung gestaltete sich entsprechend aufwändig, da weder OpenJDK noch zwingend _jedes_ Betriebssystem einen einheitlichen Zugriffsweg für unterschiedliche Hardware kennt, OpenJDK intern einige Fallstricke bietet, und es keine _einheitliche_ API innerhalb der internen OpenJDK-Klassen für den Zugriff auf _jegliche_ Hardware gibt! Entsprechend muss der Code einige Fallunterscheidungen treffen und wird entsprechend schwer lesbar (und noch schwieriger zu testen: alleine die umfangreichen Tests haben mich Monate an Freizeit gekostet). Aus Gründen der Lesbarkeit wird daher nur der Pseudocode abgedruckt; der vollständige Quellcode ist im Github-Repository<<TransferTo>> von OpenJDK zu finden und ist auf jeden Fall einen Blick unter Java's Motorhaube wert!
+
+.Performance durch Offloading (Pseudocode)
+----
+public long transferTo(OutputStream out) throws IOException {
+    if (source is a file and target is a file, socket or other hardware-device)
+        return offloadToOperatingSystem(file, target);
+
+    if (target is a file and source is a file, socket or other hardware-device)
+        return offloadToOperatingSystem(source, file);
+
+    return performOriginalLoop(out);
+}
+----
 
 
-== Erfolg
+Wie am Pseudocode zu sehen ist, werden im Prinzip drei Wege unterschieden: Die Quelle ist ein File, das Ziel ist ein File, oder keines von beiden ist ein File. Dies begründet sich in den API-Befehlen, welche die Betriebssysteme zum Offloading, also zur vollständigen Auslagerung an das Betriebssystem unterstützen. Tatsächlich hardware-beschleunigt sind also zum aktuellen Entwicklungsstand nur jene Transfers, bei denen Quelle oder Ziel eine Datei sind. Zukünftig sind weitere Optimierungen denkbar, wie ich weiter unten noch ausführen werde. Weitere Beschleunigung erledigt OpenJDK übrigens durch andere Tricks, wie z. B. aufwändig ermittelte Puffergrößen (für moderne Speichertechnologie relative optimale 16K), das Wiederverwenden von Off-Heap-Puffern (vermeidet Reallokationskosten und reduziert GC pressure), etc.
+
+Wer sich den tatsächlichen Quellcode der Optimierung auf Github anschaut wird sicherlich einige Fragen habe. Nicht alle sind im Rahmen dieses Zeitschriftenartikels zu beantworten; hierzu sei daher auf eine meiner Live-Events zum Thema verwiesen<<JugCh>>, um wirklich in die Details der Lösung zu gehen.
 
 
-== Ausblick
+== Erfolg oder Misserfolg, das ist hier die Frage!
 
-Weitere Ideen für die Zukunft.
-- Sonstige Channel-Transfers
-- Lesbarkeit verbessern
-- Reader.transferTo()
+Nach nunmehr Jahren, die von der ersten Idee bis zur finalen Umsetzung ins Land gingen, frägt man sich: Hat sich das denn gelohnt? Die Antwort ist eindeutig ja, und zwar aus mehreren Gründen.
+
+Zum einen beschleunigt die vorgenommene Änderung (die etwas umfangreicher war als das, war ich im Rahmen dieses Artikels beleuchten konnte) nicht nur meinen eigenen Code bzw. den von Maven, sondern _jede_ Anwendung, die `transferTo()` verwendet - und das sind vermutlich zig tausende. Zum anderen wird durch das Offloading, also die Delegation an der Betriebssystem bzw. die Hardware, der Transfer _effizienter_, d. h. es wird weniger Strom verbraucht, die CPUs stehen für andere Dinge zur Verfügung, und in letzter Konsequenz entsteht vermutlich auch eine ganze Menge CO~2~ weniger (zumindest wenn man bedenkt, dass Filetransfers eine ziemlich große Rolle spielen bei vielen Anwendungen, multipliziert mit zig tausenden an Diensten, die in Java geschrieben sind). Und zu guter Letzt läuft mein Build tatsächlich etwas schneller - aber eben _nur_ etwas, denn mehr als einen ein- bis zweistellige Prozentsatz bringt das Offloading in der Realität leider nicht (dort gibt es zu viele weitere Einflussfaktoren, beispielsweise was die Hardware sonst gerade noch zu tun hat, oder wie gut der Cache gefüllt ist). Mehr bringt übrigens der Einsatz von `Files.copy()` zur Kopie _ganzer_ Dateien (was ich, das habt Ihr sicher schon vermutet, ebenfalls in Maven respektive Plexus eingebaut habe). Spaß hat es aber auf jeden Fall gemacht. Ich habe sehr viel über die Interna von OpenJDK gelernt, und arbeite seither mit Freude an weiteren Optimierungen von OpenJDK und anderen Open-Source-Projekten, die `transferTo()` dank meiner Änderung nun einsetzen (aktuell: Jersey, den Kern von GlassFish).
+
+An dieser Stelle eine Bitte an Euch alle: Nutzt ein modernes JDK (z. B. 21-LTS), ersetzt die alten File-Streams durch solche, die per `Files.new*Stream` erzeugt wurden, und werft die handgemachten Schleifen weg. Wo immer es geht, setzt Ihr bitte `transferTo()` und `Files.copy()` ein. Euere Stromrechnung und unsere Umwelt danken es Euch!
+
+.Schneidet alte Zöpfe ab!
+----
+var inputStream = new FileInputStream(name); // weg damit!
+var inputStream = Files.newInputStream(name); // bitte nur noch so!
+----
+
+
+== Und wie geht's nun weiter?
+
+Natürlich ist an dieser Stelle längst nicht Schluss. OpenJDK bietet noch viel Luft nach oben für weitere Optimierungen! Ich möchte die Effizienz zukünftig noch weiter erhöhen und habe mir da schon eine Liste gemacht…:
+* Ein PR für die Beschleunigung weiterer Quelle-/Ziel-Paare liegt bereits vor.
+* Es wäre sinnvoll, die Beschleunigung auch dann zu erhalten, wenn die _alte_ I/O-API (`new FileInputStream()`) benutzt wird.
+* Der Code sollte definitiv besser lesbar sein.
+* Nach `InputStream` wartet die Klasse `Reader` auf mich, die potenziell das gleich Problem hat: Sie macht eine Schleife über einen Puffer im Heap!
+
+Wie Ihr seht, ist es also gar nicht so schwer (und schon gar nicht unmöglich) als "Außenstehender" an OpenJDK mitzuarbeiten. Ich würde mich freuen, wenn Ihr diesen Artikel als Inspiration nehmt, um eigene Optimierungen an der Java-Laufzeitbibliothek vorzunehmen. Wenn Ihr dazu Fragen habt, wendet Euch gerne an mich! Weitere Infos dazu findet Ihr auch auf meinem Youtube-Kanal<<Youtube>>.
+
 
 [bibliography]
 == Quellen
 
 - [[[JMH,1]]] Java Microbenchmark Harness: link:https://github.com/openjdk/jmh/[]
-- [[[TransferTo,2]]] Quellcode der finalen Lösung: link:[]
+- [[[TransferTo,2]]] Quellcode der finalen Lösung: link:[https://github.com/openjdk/jdk22/blob/9f0469b94a97886e4ac0ee6cb870763430a1e487/src/java.base/share/classes/sun/nio/ch/ChannelInputStream.java#L224]
+- [[[JugCh,3]]] Live-Mitschnitt eines Online-Events: link:[https://youtu.be/fga97dXb9G8]
+- [[[Youtube,4]]] Videos zu meinen Open-Source-Contributions: link:[https://www.youtube.com/@headcrashing]
 
 
-== Über den Autoren/die Autorin
+== Über den Autor
 
 Markus Karg ist Entwicklungsleiter eines mittelständischen Softwarehauses sowie Autor, Konferenzsprecher und Consultant. Der passierte Open-Source-Contributor ist Co-Autor der JAX-RS-Spezifikation und optimiert seit einigen Jahren leidenschaftlich die Performance der Java-Laufzeitbibliothek.
