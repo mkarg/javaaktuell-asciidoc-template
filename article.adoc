@@ -21,23 +21,37 @@ Machmal muss man ungewöhnliche Wege gehen, um seine Anwendung zu beschleunigen.
 
 == Wie alles begann
 
-Vor einigen Jahren bemerkte ich, dass mein Maven-Build sehr langsam war, und das störte mein Team sehr. Schnell war als Ursache die Menge und Größe der von uns verwendeten Dateien ausgemacht, denn unser Projekt sehr hatte viele und sehr große Dateien. Seltsamerweise schien Maven sie in den Hauptspeicher zu laden, obwohl sie keines Processings bedürfen (beispielsweise beim "Download" aus dem lokalen Repository). Eine Prüfung des Quellcodes von Maven (genau genommen von dessen I/O-Bibliothek aus dem Plexus-Projekt) zeigte, dass Maven zum Kopieren eine Schleife über ein Paar an InputStream und OutputStream benutzte. Eine Schleife, wie wir sie alle schon zigfach geschrieben hatten in den letzten Dekaden.
+Vor einigen Jahren bemerkte ich, dass mein Maven-Build sehr langsam war, und das störte mein Team sehr. Schnell war als Ursache die Menge und Größe der von uns verwendeten Dateien ausgemacht, denn unser Projekt beinhaltete sehr viele und vor allem sehr große Dateien. Seltsamerweise schien Maven sie in den Hauptspeicher zu laden, obwohl sie keines Processings bedürfen (beispielsweise beim "Download" aus dem lokalen Repository). Eine Prüfung des Quellcodes von Maven (genau genommen von dessen I/O-Bibliothek aus dem Plexus-Projekt) zeigte, dass Maven zum Kopieren eine Schleife über ein Paar an InputStream und OutputStream benutzte. Eine Schleife, wie wir sie alle schon zigfach geschrieben hatten in den letzten Dekaden.
 
 Als versierter Open-Source-Contributor sandte ich einen Pull Request ein, der die Schleife durch den seit Java 9 existierenden Befehl InputStream.transferTo(OutputStream) ersetzte. Meine Hoffnung war, dass OpenJDK die Methode nicht nur als "Syntactic Sugar" anbot, sondern sie in irgend einer Art und Weise performancetechnisch optimiert.
 
-Wie ein auf Wunsch des Maven-Teams durchgeführter JMH-Benchmark zeige, war dem leider nicht so. Maven war genauso langsam wir vorher. Also grub ich noch ein paar Schichten tiefer und fand zu meinem Erschrecken im Quellcode von OpenJDK die gleiche simple Schleife, die ich kurz vorher aus Maven ausgebaut hatte. Um die Performance 
-Nun folgt der eigentliche Artikeltext. Bitte schreibe im Fließtext und gebe die Zeilenschaltung nur am Ende eines Absatzes ein. Zwischen Absätzen verwende bitte eine Leerzeile. Die automatische Trennung bitte ausschalten.
+Wie ein auf Wunsch des Maven-Teams durchgeführter JMH-Benchmark<<JMH>> zeige, war dem leider nicht so. Maven war somit genauso langsam wie vorher! Also grub ich noch ein paar Schichten tiefer und fand zu meinem Erschrecken im Quellcode von OpenJDK die gleiche, simple Schleife, die ich kurz vorher aus Maven ausgebaut hatte (siehe Listing 1).
 
-Text kann je nach Bedarf *fett* oder _kursiv_ oder *_fett und kursiv_* formatiert werden. Befehle oder ähnliches im Fliesstext können in `Monospace` geschrieben werden.
+.Nicht zur Nachahmung empfohlen: Sehr langsamer Original-Code aus JDK 9
+----
+public long transferTo(OutputStream out) throws IOException {
+    Objects.requireNonNull(out, "out");
+    long transferred = 0;
+    byte[] buffer = new byte[DEFAULT_BUFFER_SIZE];
+    int read;
+    while ((read = this.read(buffer, 0, DEFAULT_BUFFER_SIZE)) >= 0) {
+        out.write(buffer, 0, read);
+        transferred += read;
+    }
+    return transferred;
+}
+----
 
 
-== Hot Spot identifizieren, Lösung entwickeln
+== Das schnellste Java ist: gar kein Java
 
+Um die Performance zu steigern musste ich also wohl oder übel einen Pull Request an OpenJDK senden, welcher der Java-Laufzeitbibliothek abgewöhnt, die Datei *grundlos* in kleinen Häppchen der Größe `DEFAULT_BUFFER_SIZE` (damals gerade mal 8K) durch den Java-Heap zu pumpen. Was mir vorschwebte war eher, die JVM gar nicht erst mit der Aufgabe zu belasten, denn ein Betriebssystem ist für Aufgaben der Art "Daten von hier nach da schieben" bestens gerüstet. Es gab keinerlei Grund, diese Aufgabe überhaupt in Java lösen zu wollen.
 
-== Konstruktion
+Hierzu muss man wissen, dass der Kern des Betriebssystem (egal ob Linux oder Windows) diese Aufgabe *super schnell* erledigen kann, je nach OS und Hardware diese Aufgabe sogar direkt an die Hardware (z. B. ein SAN-Device) delegieren kann, der Transfer durch die JVM jedoch um Größenordnungen langsamer abläuft, da jedes Byte den ganzen Weg in das Java-Heap und vor dort wieder zurück laufen muss (vereinfacht gesagt: je länger der Weg, desto langsamer der Transfer; im schlimmsten Fall liegen die Dateien in einem SAN oder gar Cloud-Laufwerk und müssten zweimal LAN oder WAN passieren). Selbst im besten Fall (Transfers zwischen lokalen Dateien) wäre der Umweg über die JVM und deren Heap, wie wenn man zum Briefkasten um die Ecke erst einmal über die Autobahn fahren müsste!
 
+Was nun aber so einfach klingt, war in OpenJDK gar nicht so einfach umzusetzen. In letzter Konsequenz waren mehrere, aufeinander aufbauende Pull Request nötig, um in jedem Fall die optimale Performance zu erzielen. Dies begründet sich unter anderem darin, dass `transferTo()` nicht auf Dateien beschränkt ist (dann wäre die Lösung trivial gewesen), und dass die diversen Betriebssysteme unterschiedliche APIs für unterschiedliche Arten von Datenquellen und -Senken besitzen. So gibt es beispielsweise Befehle, die einen direkten Datei-zu-Datei-Transfer beschleunigen, aber andere, die das gleiche mit Netzwerksockets können. Was aber, wenn von einem Socket empfangen und an eine Datei gesendet werden soll? Meine Optimierung von `transferTo()` sollte ja *alle* Nutzungsarten beschleunigen.
 
-== Implementierung
+Die von mir entwickelte und über Monate hinweg gemeinsam mit dem Java-I/O-Kernteam um Alan Bateman, Brian Burkhalter und Lance Andersen immer weiter verbesserte Lösung gestaltete sich entsprechend aufwändig, da weder OpenJDK noch zwingend *jedes* Betriebssystem einen einheitlichen Zugriffsweg für unterschiedliche Hardware kennt. Entsprechend muss der Code sehr viele Unterscheidungen treffen. Aus Gründen der Lesbarkeit wird nur der Pseudocode abgedruckt; der vollständige Quellcode ist im Github-Repository<<TransferTo>> von OpenJDK zu finden.
 
 
 == Erfolg
@@ -45,16 +59,18 @@ Text kann je nach Bedarf *fett* oder _kursiv_ oder *_fett und kursiv_* formatier
 
 == Ausblick
 
-Weitere Ideen für die Zukunft-
-
+Weitere Ideen für die Zukunft.
+- Sonstige Channel-Transfers
+- Lesbarkeit verbessern
+- Reader.transferTo()
 
 [bibliography]
 == Quellen
 
-- [[[TestQuelle,1]]] Autor(in) (Jahr): Titel. Verlag, Ort
-- [[[JavaAktuell,2]]] Java aktuell Website: link:https://www.ijug.eu/de/java-aktuell/zeitschrift/[]
+- [[[JMH,1]]] Java Microbenchmark Harness: link:https://github.com/openjdk/jmh/[]
+- [[[TransferTo,2]]] Quellcode der finalen Lösung: link:[]
 
 
 == Über den Autoren/die Autorin
 
-...
+Markus Karg ist Entwicklungsleiter eines mittelständischen Softwarehauses sowie Autor, Konferenzsprecher und Consultant. Der passierte Open-Source-Contributor ist Co-Autor der JAX-RS-Spezifikation und optimiert seit einigen Jahren leidenschaftlich die Performance der Java-Laufzeitbibliothek.
