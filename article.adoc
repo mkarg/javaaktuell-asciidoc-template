@@ -109,4 +109,4 @@ Wie Ihr seht, ist es also gar nicht so schwer (und schon gar nicht unmöglich) a
 
 == Über den Autor
 
-Markus Karg ist Entwicklungsleiter eines mittelständischen Softwarehauses sowie Autor, Konferenzsprecher und Consultant. Der passierte Open-Source-Contributor ist Co-Autor der JAX-RS-Spezifikation und optimiert seit einigen Jahren leidenschaftlich die Performance der Java-Laufzeitbibliothek.
+Markus Karg ist Entwicklungsleiter eines mittelständischen Softwarehauses sowie Autor, Konferenzsprecher und Consultant. Der passionierte Open-Source-Contributor ist Co-Autor der JAX-RS-Spezifikation und optimiert seit einigen Jahren leidenschaftlich die Performance der Java-Laufzeitbibliothek.
