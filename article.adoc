@@ -27,6 +27,7 @@ Als versierter Open-Source-Contributor sandte ich einen Pull Request ein, der di
 
 Wie ein auf Wunsch des Maven-Teams durchgeführter JMH-Benchmark<<JMH>> aber zeige, war dem leider nicht so. Maven war somit genauso langsam wie vorher! Also grub ich noch ein paar Schichten tiefer und fand zu meinem Erschrecken im Quellcode von OpenJDK die gleiche, simple Schleife, die ich kurz vorher aus Maven ausgebaut hatte (siehe Listing xref:#listing.original[xrefstyle=short]).
 
+[source,java]
 [[listing.original]]
 .Nicht zur Nachahmung empfohlen: Sehr langsamer Original-Code aus JDK 9
 ----
@@ -54,6 +55,7 @@ Was nun aber so einfach klingt, war in OpenJDK gar nicht so einfach umzusetzen. 
 
 Die von mir entwickelte und über Monate hinweg gemeinsam mit dem Java-I/O-Kernteam um Alan Bateman, Brian Burkhalter und Lance Andersen immer weiter verbesserte Lösung gestaltete sich entsprechend aufwändig, da weder OpenJDK noch zwingend _jedes_ Betriebssystem einen einheitlichen Zugriffsweg für unterschiedliche Hardware kennt, OpenJDK intern einige Fallstricke bietet, und es keine _einheitliche_ API innerhalb der internen OpenJDK-Klassen für den Zugriff auf _jegliche_ Hardware gibt! Entsprechend muss der Code einige Fallunterscheidungen treffen und wird entsprechend schwer lesbar (und noch schwieriger zu testen: alleine die umfangreichen Tests haben mich Monate an Freizeit gekostet). Aus Gründen der Lesbarkeit wird daher nur der Pseudocode abgedruckt; der vollständige Quellcode ist im Github-Repository<<TransferTo>> von OpenJDK zu finden und ist auf jeden Fall einen Blick unter Java's Motorhaube wert!
 
+[source,java]
 .Performance durch Offloading (Pseudocode)
 ----
 public long transferTo(OutputStream out) throws IOException {
@@ -81,6 +83,7 @@ Zum einen beschleunigt die vorgenommene Änderung (die etwas umfangreicher war a
 
 An dieser Stelle eine Bitte an Euch alle: Nutzt ein modernes JDK (z. B. 21-LTS), ersetzt die alten File-Streams durch solche, die per `Files.new*Stream` erzeugt wurden, und werft die handgemachten Schleifen weg. Wo immer es geht, setzt Ihr bitte `transferTo()` und `Files.copy()` ein. Euere Stromrechnung und unsere Umwelt danken es Euch!
 
+[source,java]
 .Schneidet alte Zöpfe ab!
 ----
 var inputStream = new FileInputStream(name); // weg damit!
