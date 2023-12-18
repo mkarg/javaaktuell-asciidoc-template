@@ -94,6 +94,7 @@ var inputStream = Files.newInputStream(name); // bitte nur noch so!
 == Und wie geht's nun weiter?
 
 Natürlich ist an dieser Stelle längst nicht Schluss. OpenJDK bietet noch viel Luft nach oben für weitere Optimierungen! Ich möchte die Effizienz zukünftig noch weiter erhöhen und habe mir da schon eine Liste gemacht…:
+
 * Ein PR für die Beschleunigung weiterer Quelle-/Ziel-Paare liegt bereits vor.
 * Es wäre sinnvoll, die Beschleunigung auch dann zu erhalten, wenn die _alte_ I/O-API (`new FileInputStream()`) benutzt wird.
 * Der Code sollte definitiv besser lesbar sein.
