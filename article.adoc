@@ -25,8 +25,9 @@ Vor einigen Jahren bemerkte ich, dass mein Maven-Build sehr langsam war, und das
 
 Als versierter Open-Source-Contributor sandte ich einen Pull Request ein, der die Schleife durch den seit Java 9 existierenden Befehl `InputStream.transferTo(OutputStream)` ersetzte. Meine Hoffnung war, dass OpenJDK die Methode nicht nur als "Syntactic Sugar" anbot, sondern sie in irgend einer Art und Weise performancetechnisch optimierte.
 
-Wie ein auf Wunsch des Maven-Teams durchgeführter JMH-Benchmark<<JMH>> aber zeige, war dem leider nicht so. Maven war somit genauso langsam wie vorher! Also grub ich noch ein paar Schichten tiefer und fand zu meinem Erschrecken im Quellcode von OpenJDK die gleiche, simple Schleife, die ich kurz vorher aus Maven ausgebaut hatte (siehe Listing 1).
+Wie ein auf Wunsch des Maven-Teams durchgeführter JMH-Benchmark<<JMH>> aber zeige, war dem leider nicht so. Maven war somit genauso langsam wie vorher! Also grub ich noch ein paar Schichten tiefer und fand zu meinem Erschrecken im Quellcode von OpenJDK die gleiche, simple Schleife, die ich kurz vorher aus Maven ausgebaut hatte (siehe Listing xref:#listing.original[xrefstyle=short]).
 
+[[listing.original]]
 .Nicht zur Nachahmung empfohlen: Sehr langsamer Original-Code aus JDK 9
 ----
 public long transferTo(OutputStream out) throws IOException {
